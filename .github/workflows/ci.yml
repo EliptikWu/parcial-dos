@@ -1,0 +1,162 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test-and-analyze:
+    runs-on: ubuntu-latest
+    
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: rootpassword
+          MYSQL_DATABASE: todoapp_db
+          MYSQL_USER: todoapp_user
+          MYSQL_PASSWORD: todoapp_password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Cache pip packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Wait for MySQL
+      run: |
+        for i in {1..30}; do
+          if mysqladmin ping -h 127.0.0.1 -u todoapp_user -ptodoapp_password --silent; then
+            echo "MySQL is ready!"
+            break
+          fi
+          echo "Waiting for MySQL... ($i/30)"
+          sleep 2
+        done
+
+    - name: Run Static Analysis with Bandit
+      run: |
+        echo "Running Bandit security analysis..."
+        bandit -r tasks/ todoapi/ -f txt -o bandit-report.txt || true
+        cat bandit-report.txt
+        # Check if there are high severity issues
+        if grep -q "Severity: High" bandit-report.txt; then
+          echo "❌ High severity security issues found!"
+          exit 1
+        fi
+        echo "✓ Bandit analysis passed"
+
+    - name: Run Flake8 Linting
+      run: |
+        echo "Running Flake8 linting..."
+        flake8 tasks/ todoapi/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        echo "✓ Flake8 linting passed"
+
+    - name: Run Database Migrations
+      env:
+        DATABASE_HOST: 127.0.0.1
+        DATABASE_PORT: 3306
+        DATABASE_NAME: todoapp_db
+        DATABASE_USER: todoapp_user
+        DATABASE_PASSWORD: todoapp_password
+        SECRET_KEY: test-secret-key-for-ci
+        DEBUG: False
+      run: |
+        python manage.py makemigrations --check --dry-run || true
+        python manage.py migrate --no-input
+        echo "✓ Migrations completed"
+
+    - name: Run Unit Tests
+      env:
+        DATABASE_HOST: 127.0.0.1
+        DATABASE_PORT: 3306
+        DATABASE_NAME: todoapp_db
+        DATABASE_USER: todoapp_user
+        DATABASE_PASSWORD: todoapp_password
+        SECRET_KEY: test-secret-key-for-ci
+        DEBUG: False
+      run: |
+        echo "Running Unit Tests..."
+        pytest tests/test_unit.py -v -m unit
+        echo "✓ Unit tests passed"
+
+    - name: Run Integration Tests
+      env:
+        DATABASE_HOST: 127.0.0.1
+        DATABASE_PORT: 3306
+        DATABASE_NAME: todoapp_db
+        DATABASE_USER: todoapp_user
+        DATABASE_PASSWORD: todoapp_password
+        SECRET_KEY: test-secret-key-for-ci
+        DEBUG: False
+      run: |
+        echo "Running Integration Tests..."
+        pytest tests/test_integration.py -v -m integration
+        echo "✓ Integration tests passed"
+
+    - name: Run E2E Tests
+      env:
+        DATABASE_HOST: 127.0.0.1
+        DATABASE_PORT: 3306
+        DATABASE_NAME: todoapp_db
+        DATABASE_USER: todoapp_user
+        DATABASE_PASSWORD: todoapp_password
+        SECRET_KEY: test-secret-key-for-ci
+        DEBUG: False
+      run: |
+        echo "Running E2E Tests..."
+        pytest tests/test_e2e.py -v -m e2e
+        echo "✓ E2E tests passed"
+
+    - name: Run All Tests with Coverage
+      env:
+        DATABASE_HOST: 127.0.0.1
+        DATABASE_PORT: 3306
+        DATABASE_NAME: todoapp_db
+        DATABASE_USER: todoapp_user
+        DATABASE_PASSWORD: todoapp_password
+        SECRET_KEY: test-secret-key-for-ci
+        DEBUG: False
+      run: |
+        echo "Running complete test suite with coverage..."
+        pytest tests/ -v --cov=tasks --cov-report=term-missing --cov-report=html
+        echo "✓ All tests completed with coverage report"
+
+    - name: Upload Coverage Reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: htmlcov/
+
+    - name: Final Status
+      run: |
+        echo ""
+        echo "=================================="
+        echo "         ✓ ALL CHECKS PASSED      "
+        echo "=================================="
+        echo "OK"

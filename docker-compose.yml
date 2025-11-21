@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: todoapp_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: todoapp_db
+      MYSQL_USER: todoapp_user
+      MYSQL_PASSWORD: todoapp_password
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  web:
+    build: .
+    container_name: todoapp_django
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_HOST=db
+      - DATABASE_PORT=3306
+      - DATABASE_NAME=todoapp_db
+      - DATABASE_USER=todoapp_user
+      - DATABASE_PASSWORD=todoapp_password
+      - SECRET_KEY=django-insecure-dev-key-change-in-production
+      - DEBUG=True
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
